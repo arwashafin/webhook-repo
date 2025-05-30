@@ -22,6 +22,7 @@ def home():
 
 @app.route("/webhook", methods=["POST"])
 def github_webhook():
+    print("Webhook recieved")
     data = request.json
     event_type = request.headers.get("X-GitHub-Event")
 
