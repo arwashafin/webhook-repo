@@ -1,89 +1,79 @@
 from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 from pymongo import MongoClient
 from datetime import datetime
-from dotenv import load_dotenv
-import os
-
-# Load environment variables
-load_dotenv()
 
 app = Flask(__name__)
-print("Flask App Created")
+CORS(app)
 
-# Connect to MongoDB
-mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-client = MongoClient(mongo_uri)
-db = client["github_webhooks"]
-events_collection = db["events"]
+# Connect to local MongoDB
+client = MongoClient("mongodb://localhost:27017/")
+db = client.github_events
+events = db.events
 
-@app.route("/")
+@app.route('/')
 def home():
-    return render_template("index.html")
+    return render_template('index.html')
 
-@app.route("/webhook", methods=["POST"])
-def github_webhook():
-    print("Webhook recieved")
-    data = request.json
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    print("Webhook received!")
+    print("Headers:", request.headers)
+    print("Payload:", request.json)
     event_type = request.headers.get("X-GitHub-Event")
+    payload = request.json
+    print("Recieved:", payload)
 
     try:
         if event_type == "push":
-            author = data.get("pusher", {}).get("name")
-            to_branch = data.get("ref", "").split("/")[-1]
+            author = payload["pusher"]["name"]
+            to_branch = payload["ref"].split("/")[-1]
             timestamp = datetime.utcnow().isoformat()
-
-            events_collection.insert_one({
+            events.insert_one({
+                "type": "PUSH",
                 "author": author,
-                "action": "PUSH",
                 "to_branch": to_branch,
                 "timestamp": timestamp
             })
 
         elif event_type == "pull_request":
-            action = data.get("action")
-            pr_data = data.get("pull_request", {})
-
+            action = payload["action"]
+            pr = payload["pull_request"]
+            author = pr["user"]["login"]
+            from_branch = pr["head"]["ref"]
+            to_branch = pr["base"]["ref"]
             if action == "opened":
-                author = pr_data.get("user", {}).get("login")
-                from_branch = pr_data.get("head", {}).get("ref")
-                to_branch = pr_data.get("base", {}).get("ref")
-                timestamp = pr_data.get("created_at")
-
-                events_collection.insert_one({
+                events.insert_one({
+                    "type": "PULL_REQUEST",
                     "author": author,
-                    "action": "PULL_REQUEST",
                     "from_branch": from_branch,
                     "to_branch": to_branch,
-                    "timestamp": timestamp
+                    "timestamp": pr["created_at"]
                 })
-
-            elif action == "closed" and pr_data.get("merged"):
-                author = pr_data.get("user", {}).get("login")
-                from_branch = pr_data.get("head", {}).get("ref")
-                to_branch = pr_data.get("base", {}).get("ref")
-                timestamp = pr_data.get("merged_at")
-
-                events_collection.insert_one({
+            elif action == "closed" and pr["merged"]:
+                events.insert_one({
+                    "type": "MERGE",
                     "author": author,
-                    "action": "MERGE",
                     "from_branch": from_branch,
                     "to_branch": to_branch,
-                    "timestamp": timestamp
+                    "timestamp": pr["merged_at"]
                 })
 
         return jsonify({"status": "success"}), 200
-
     except Exception as e:
-        print("Error:", str(e))
         return jsonify({"error": str(e)}), 400
 
-@app.route("/events", methods=["GET"])
+@app.route('/events', methods=['GET'])
 def get_events():
-    latest = list(events_collection.find().sort("timestamp", -1).limit(10))
-    for e in latest:
-        e["_id"] = str(e["_id"])  # Convert ObjectId to string
-    return jsonify(latest)
+    docs = events.find().sort("timestamp", -1).limit(10)
+    result = []
+    for doc in docs:
+        doc["_id"] = str(doc["_id"])
+        result.append(doc)
+    return jsonify(result)
 
 if __name__ == "__main__":
-    print("Starting the flask server..")
-    app.run(debug=True)
+    app.run(port=5000)
+
+
+    
